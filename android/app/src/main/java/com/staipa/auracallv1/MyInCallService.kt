@@ -1,41 +1,59 @@
-// File: com/staipa/auracallv1/MyInCallService.kt
 package com.staipa.auracallv1
 
 import android.content.Intent
+import android.net.Uri
 import android.telecom.Call
 import android.telecom.InCallService
 import android.util.Log
 
+/**
+ * Updated InCallService: when a Call is added, try to find the matching AuraConnection
+ * via the Call handle (URI) or call extras (CALL_ID). Attach UI and register a
+ * lightweight callback to keep UI in sync.
+ */
 class MyInCallService : InCallService() {
 
     private val TAG = "AuraInCallService"
 
-    // The system calls this when a new call (incoming or outgoing) is added.
     override fun onCallAdded(call: Call?) {
         super.onCallAdded(call)
         Log.d(TAG, "Call Added. State: ${call?.state}")
-        
-        // --- KEY STEP: Launch your custom InCallActivity ---
+
+        // Best-effort: try to match the Call to a Connection using a key.
+        val handle: Uri? = try { call?.details?.handle } catch (e: Exception) { null }
+        val callKey = when {
+            call?.details?.extras?.getString("CALL_ID") != null -> call.details.extras?.getString("CALL_ID")
+            handle != null -> handle.schemeSpecificPart
+            else -> null
+        }
+
+        // Start UI
         val intent = Intent(this, InCallActivity::class.java).apply {
-            // Flags are important to launch a UI from a Service context
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            callKey?.let { putExtra("CALL_KEY", it) }
+            handle?.let { putExtra("CALL_HANDLE", it.toString()) }
         }
         startActivity(intent)
-        
-        // In a real app, you would also pass Call details (e.g., call ID) 
-        // to the InCallActivity here.
+
+        // Optional: register a callback on the Call to forward state changes to the UI via broadcasts
+        call?.registerCallback(object : Call.Callback() {
+            override fun onStateChanged(c: Call?, newState: Int) {
+                super.onStateChanged(c, newState)
+                // You can broadcast or use another mechanism to update the UI
+                Log.d(TAG, "Call state changed: $newState")
+            }
+
+            override fun onDisconnected(c: Call?, details: Call.Details?) {
+                super.onDisconnected(c, details)
+                // Tell the UI to finish if needed
+                val finish = Intent("com.staipa.auracallv1.ACTION_FINISH_INCALL_ACTIVITY")
+                sendBroadcast(finish)
+            }
+        })
     }
 
-    // The system calls this when a call is disconnected/removed.
     override fun onCallRemoved(call: Call?) {
         super.onCallRemoved(call)
         Log.d(TAG, "Call Removed. State: ${call?.state}")
-        
-        // If all calls are gone, dismiss the InCallActivity
-        if (getCalls().isEmpty()) {
-            // A simple way to signal to the activity to finish
-            val intent = Intent("com.staipa.auracallv1.ACTION_FINISH_INCALL_ACTIVITY")
-            sendBroadcast(intent)
-        }
     }
 }
